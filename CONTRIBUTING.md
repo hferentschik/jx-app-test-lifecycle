@@ -1,7 +1,6 @@
 # Contribution guidelines
 
 ## Filing issues
-## Filing issues
 
 File issues using the standard [Github issue tracker](https://github.com/jenkins-x-apps/jx-app-test-lifecycle/issues) for this repository.
 Before you submit a new issue, please search the list of issues to see if anyone already submitted a similar issue.

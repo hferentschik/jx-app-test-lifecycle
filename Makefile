@@ -1,10 +1,11 @@
 SHELL := /bin/bash
+OS := $(shell uname | tr '[:upper:]' '[:lower:]')
 
 GO_VARS := GO111MODULE=on GO15VENDOREXPERIMENT=1 CGO_ENABLED=0
 BUILDFLAGS := ''
 
 APP_NAME := jx-app-test-lifecycle
-MAIN := main.go
+MAIN := cmd/main.go
 
 BUILD_DIR=build
 PACKAGE_DIRS := $(shell go list ./...)
@@ -12,15 +13,16 @@ PKGS := $(subst  :,_,$(PACKAGE_DIRS))
 PLATFORMS := windows linux darwin
 os = $(word 1, $@)
 
-# setting some defaults for skaffold 
-DOCKER_REGISTRY ?= localhost:5000
-VERSION ?= latest
+VERSION ?= $(shell cat VERSION)
+
+# setting some defaults for skaffold
+DOCKER_REGISTRY ?= docker.io
 
 FGT := $(GOPATH)/bin/fgt
 GOLINT := $(GOPATH)/bin/golint
 
 .PHONY : all
-all: linux test check ## Compiles, test and verifies source
+all: linux test check ## Compiles, tests and checks sources
 
 .PHONY: $(PLATFORMS)
 $(PLATFORMS):	
@@ -44,8 +46,12 @@ check: $(GOLINT) $(FGT)
 	@echo "VETTING"
 	@$(GO_VARS) $(FGT) go vet $(PACKAGE_DIRS)
 
+.PHONY : run
+run: $(OS) ## Runs the app locally
+	$(BUILD_DIR)/$(APP_NAME)
+
 .PHONY: watch
-watch: ## Watches for file changes in Go source files and re-runs 'skaffold build'. Requires entr
+watch: ## Watches for file changes in Go source files and re-runs 'skaffold build' (Requires entr)
 	find . -name "*.go" | entr -s 'make skaffold-build' 
 
 .PHONY: skaffold-build
@@ -54,11 +60,37 @@ skaffold-build: linux ## Runs 'skaffold build'
 
 .PHONY: skaffold-run
 skaffold-run: linux ## Runs 'skaffold run'
-	DOCKER_REGISTRY=$(DOCKER_REGISTRY) VERSION=$(VERSION) skaffold run -f skaffold.yaml -p dev 
+	DOCKER_REGISTRY=$(DOCKER_REGISTRY) VERSION=$(VERSION) skaffold run -f skaffold.yaml -p dev
 
 .PHONY: help
 help: ## Prints this help
-	@grep -E '^[^.]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-40s\033[0m %s\n", $$1, $$2}'	
+	@grep -E '^[^.]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-40s\033[0m %s\n", $$1, $$2}' | sort
+
+.PHONY: release
+release: linux test check update-release-version skaffold-build release-branch ## Creates a release
+	cd charts/$(APP_NAME) && jx step helm release
+	jx step changelog --version v$(VERSION) -p $$(git merge-base $$(git for-each-ref --sort=-creatordate --format='%(objectname)' refs/tags | sed -n 2p) master) -r $$(git merge-base $$(git for-each-ref --sort=-creatordate --format='%(objectname)' refs/tags | sed -n 1p) master)
+
+.PHONY: update-release-version
+update-release-version: ## Updates the release version
+ifeq ($(OS),darwin)
+	sed -i "" -e "s/version:.*/version: $(VERSION)/" ./charts/$(APP_NAME)/Chart.yaml
+	sed -i "" -e "s/tag: .*/tag: $(VERSION)/" ./charts/$(APP_NAME)/values.yaml
+else ifeq ($(OS),linux)
+	sed -i -e "s/version:.*/version: $(VERSION)/" ./charts/$(APP_NAME)/Chart.yaml
+	sed -i -e "s/tag: .*/tag: $(VERSION)/" ./charts/$(APP_NAME)/values.yaml
+else
+	echo "platform $(OS) not supported to tag with"
+	exit -1
+endif
+
+.PHONY: release-branch
+release-branch:  ## Creates release branch and pushes release
+	git checkout -b release-v$(VERSION)
+	git add --all
+	git commit -m "release $(VERSION)" --allow-empty # if first release then no version update is performed
+	git tag -fa v$(VERSION) -m "Release version $(VERSION)"
+	git push origin HEAD v$(VERSION)
 
 # Targets to get some Go tools
 $(FGT):
